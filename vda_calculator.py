@@ -24,9 +24,7 @@ def compute_vda_fifo(df):
 
     # Ensure numeric fields
     df["Amount"] = df["Amount"].apply(extract_number).astype(float)
-    # "Total" should represent buy total cost
     df["Total"] = df["Total"].apply(extract_number).astype(float)
-    # Price numeric extraction
     df["Price_clean"] = df["Price"].apply(extract_number).astype(float)
 
     # Ensure Date is datetime (dayfirst True for India / Apr->Mar fiscal year)
@@ -52,7 +50,6 @@ def compute_vda_fifo(df):
 
         # Attempt to match this sell with previous buys only (buy.Date <= sell.Date)
         while sell_qty > 0:
-            # If we do not currently have a remaining buy amount, try to load the next buy
             if remaining_buy_amount == 0:
                 # Advance buy_pointer until we find a buy that happened on or before this sell_date
                 while buy_pointer < len(buys) and buys.loc[buy_pointer, "Date"] <= sell_date:
@@ -70,15 +67,13 @@ def compute_vda_fifo(df):
                         "Remaining Amount": sell_qty,
                         "Price": sell_price
                     })
-                    break  # exit while sell_qty loop; this sell cannot be fulfilled by prior buys
+                    break
 
             if remaining_buy_amount == 0:
-                # Nothing to match, break to next sell
                 break
 
             # Match quantity
             matched_qty = min(sell_qty, remaining_buy_amount)
-            # allocate proportional cost from the current remaining buy cost
             cost = remaining_buy_cost * (matched_qty / remaining_buy_amount) if remaining_buy_amount != 0 else 0.0
             consideration = sell_price * matched_qty
             profit_loss = consideration - cost
@@ -91,7 +86,6 @@ def compute_vda_fifo(df):
                 "Net Profit/Loss": profit_loss
             })
 
-            # reduce amounts
             remaining_buy_amount -= matched_qty
             remaining_buy_cost -= cost
             sell_qty -= matched_qty
@@ -99,19 +93,20 @@ def compute_vda_fifo(df):
     results_df = pd.DataFrame(results)
 
     if results_df.empty:
-        # Return empty grouped DataFrame and unmatched if any
         return results_df, pd.DataFrame(unmatched_sells)
 
-    # Group by acquisition and transfer date, sum numeric columns
+    # 🔹 Ensure grouping is only by DATE (ignore time part)
+    results_df["Date of acquisition"] = pd.to_datetime(results_df["Date of acquisition"]).dt.date
+    results_df["Date of transfer"] = pd.to_datetime(results_df["Date of transfer"]).dt.date
+
     grouped = results_df.groupby(["Date of acquisition", "Date of transfer"], sort=True)
 
     final_rows = []
     for (acq_date, trf_date), group in grouped:
-        # Sum separately profits and losses so they become different rows when both exist
         profit_rows = group[group["Net Profit/Loss"] > 0].sum(numeric_only=True)
         loss_rows = group[group["Net Profit/Loss"] < 0].sum(numeric_only=True)
 
-        # Add loss row first (if exist)
+        # Add loss row first (if exists)
         if loss_rows.get("Net Profit/Loss", 0) != 0:
             final_rows.append({
                 "Date of acquisition": acq_date,
@@ -121,7 +116,7 @@ def compute_vda_fifo(df):
                 "Net Profit/Loss": round(loss_rows.get("Net Profit/Loss", 0.0), 2)
             })
 
-        # Add profit row next (if exist)
+        # Add profit row next (if exists)
         if profit_rows.get("Net Profit/Loss", 0) != 0:
             final_rows.append({
                 "Date of acquisition": acq_date,
@@ -132,8 +127,6 @@ def compute_vda_fifo(df):
             })
 
     final_df = pd.DataFrame(final_rows)
-
-    # Sort final table by acquisition then transfer
     final_df = final_df.sort_values(["Date of acquisition", "Date of transfer"]).reset_index(drop=True)
     return final_df, pd.DataFrame(unmatched_sells)
 
@@ -141,7 +134,7 @@ def compute_vda_fifo(df):
 if uploaded_file is not None:
     df = pd.read_excel(uploaded_file)
 
-    # parse dates and show basic diagnostics to help spot parsing issues
+    # Parse dates and warn if parsing issues
     df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
     if df["Date"].isna().any():
         st.warning("Some Date values could not be parsed. Check date formats in your Excel file.")
@@ -170,10 +163,11 @@ if uploaded_file is not None:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-        # If there are unmatched sells, show them so the user can correct or add missing buys
         if not unmatched_df.empty:
             st.warning("There are sells that could not be matched to prior buys. Those sells were skipped for FIFO matching.")
             st.dataframe(unmatched_df)
+
+
 
 
 
